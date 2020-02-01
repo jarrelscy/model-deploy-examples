@@ -5,7 +5,7 @@ WORKDIR /src
 COPY requirements.txt /src/
 RUN pip install -r requirements.txt
 
-COPY model0.py, model1.py, model2.py, model3.py, model4.py server.py /src/
+COPY model_best.pt server.py /src/
 
 RUN useradd docker
 USER docker

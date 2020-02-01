@@ -4,91 +4,70 @@ import cv2
 import msgpack
 import pydicom
 import numpy as np
-import tensorflow as tf
+import torch
+from model.classifier import Classifier
+from easydict import EasyDict as edict
+import torch.nn.functional as F
+from skimage.exposure import equalize_adapthist
 from flask import Flask, Response, abort, request
 from PIL import Image
-from tf_explain.core import GradCAM, SmoothGrad
+import json
 from waitress import serve
 
 app = Flask(__name__)
 model = None
 
-config = {"input_shape": (224, 224, 3)}
-
+config = {"input_shape": (3, 512, 512)}
+threshs = np.array([[ -8.159552],
+       [ -5.743932],
+       [ -8.048886],
+       [-11.211817],
+       [ -5.080043],
+       [ -9.686677]], dtype=float)
 
 def load_model():
     global model
-    model = tf.keras.models.load_model("./model.h5")
+    with open('config/example.json') as f:
+        cfg = edict(json.load(f))
+    jf_model = Classifier(cfg)
+    jf_model.cfg.num_classes = [1,1,1,1,1,1]
+    jf_model._init_classifier()    
+    jf_model._init_attention_map()
+    jf_model._init_bn()
+    jf_model.load_state_dict(torch.load('model_best.pt'))
+    model = jf_model.cuda()
 
 
-def prepare_input(image):
+def prepare_input(im):
     # convert grayscale to RGB
-    if len(image.shape) != 3 or image.shape[2] != 3:
-        image = np.stack((image,) * 3, -1)
-
-    # rescale to [0, 255]
-    max_pixel_value = np.amax(image)
-    min_pixel_value = np.amin(image)
-    if max_pixel_value >= 255:
-        pixel_range = max(1, np.abs(max_pixel_value - min_pixel_value))
-        image = image.astype(np.float32) / pixel_range * 255
-        image = image.astype(np.uint8)
-
-    # resize to input_shape
-    image = Image.fromarray(image)
-    image = image.resize(config["input_shape"][0:2])
-
-    # create input batch
-    x = np.empty((1, *config["input_shape"]))
-    x[0, :] = image
-
-    return x
+    assert len(im.shape) == 2
+    
+    im = cv2.resize(im, (1024, 1024))
+    im = equalize_adapthist(im.astype(float) / im.max(), clip_limit=0.01)    
+    im = cv2.resize(im, (512, 512))    
+    im = im * 2 - 1
+    im = np.array([[im, im, im]])
+    return torch.from_numpy(im).cuda()
 
 
 def predict(x):
-    y_prob = model.predict(x)
-    y_classes = y_prob.argmax(axis=-1)
+    with torch.no_grad():
+        y_prob = model(x)
+        y_prob = torch.cat(y_prob[0], dim=1).detach().cpu()
+        y_prob = F.sigmoid(y_prob + torch.from_numpy(threshs).reshape((1,6)))
+        y_classes = (y_prob > 0.5).numpy().astype(int)
 
-    class_index = y_classes[0]
-    probability = y_prob[0][class_index]
+        class_index = y_classes
+        probability = y_prob.numpy()
 
-    gradcam = GradCAM()
-    gradcam_output = gradcam.explain(
-        validation_data=(x, None),
-        model=model,
-        layer_name="conv_pw_13_relu",
-        class_index=class_index,
-        colormap=cv2.COLORMAP_TURBO,
-    )
-    gradcam_output_buffer = BytesIO()
-    Image.fromarray(gradcam_output).save(gradcam_output_buffer, format="PNG")
 
-    smoothgrad = SmoothGrad()
-    smoothgrad_output = smoothgrad.explain(
-        validation_data=(x, None), model=model, class_index=class_index
-    )
-    smoothgrad_output_buffer = BytesIO()
-    Image.fromarray(smoothgrad_output).save(smoothgrad_output_buffer, format="PNG")
-
-    result = {
-        "class_index": int(class_index),
-        "data": None,
-        "probability": float(probability),
-        "explanations": [
-            {
-                "name": "Grad-CAM",
-                "description": "Visualize how parts of the image affects neural network’s output by looking into the activation maps. From _Grad-CAM: Visual Explanations from Deep Networks via Gradient-based Localization_ (https://arxiv.org/abs/1610.02391)",
-                "content": gradcam_output_buffer.getvalue(),
-                "content_type": "image/png",
-            },
-            {
-                "name": "SmoothGrad",
-                "description": "Visualize stabilized gradients on the inputs towards the decision. From _SmoothGrad: removing noise by adding noise_ (https://arxiv.org/abs/1706.03825)",
-                "content": smoothgrad_output_buffer.getvalue(),
-                "content_type": "image/png",
-            },
-        ],
-    }
+        result = {
+            "class_index": list(y_classes),
+            "data": None,
+            "probability": list(probability),
+            "explanations": [           
+            ],
+        }
     return result
 
 
