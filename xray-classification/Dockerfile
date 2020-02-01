@@ -6,6 +6,8 @@ COPY requirements.txt /src/
 RUN pip install -r requirements.txt
 
 COPY model_best.pt server.py /src/
+COPY config /src/config
+COPY model /src/model
 
 RUN useradd docker
 USER docker

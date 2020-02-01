@@ -20,7 +20,7 @@
     "pos_weight": [1,1,1,1,1],
     "train_batch_size": 56,
     "dev_batch_size": 56,
-    "pretrained": true,
+    "pretrained": false,
     "log_every": 10,
     "test_every": 100,
     "epoch": 3,
