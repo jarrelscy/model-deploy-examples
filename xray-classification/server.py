@@ -34,8 +34,8 @@ def load_model():
     jf_model._init_classifier()    
     jf_model._init_attention_map()
     jf_model._init_bn()
-    jf_model.load_state_dict(torch.load('model_best.pt'))
-    model = jf_model.cuda()
+    jf_model.load_state_dict(torch.load('model_best.pt',map_location=lambda storage, loc: storage))
+    model = jf_model.cpu()
 
 
 def prepare_input(im):
@@ -47,7 +47,7 @@ def prepare_input(im):
     im = cv2.resize(im, (512, 512))    
     im = im * 2 - 1
     im = np.array([[im, im, im]])
-    return torch.from_numpy(im).cuda()
+    return torch.from_numpy(im).cpu()
 
 
 def predict(x):
